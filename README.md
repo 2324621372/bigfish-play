@@ -1,10 +1,9 @@
-# 大鱼吃小鱼 × 节拍 QTE
+# 像素深潜 · 大鱼吃小鱼 × 节拍 QTE
 
-在线玩：https://2324621372.github.io/bigfish-play/
+在线玩：https://2324621372.github.io/bigfish-play/ （打开即玩，竖屏手机）
 
-- A 像素深潜：/pixel/
-- B 蜡笔海：/doodle/
+按住任意处拖动游，右下「冲」按住加速；绿箭头=能吃，黄框=跟拍点圈咬，红框=快躲。
 
-竖屏手机打开，按住拖动游，跟着鼓点咬。
+备份：蜡笔海 v1 在 /doodle/（已冻结，不再更新）。
 
 内嵌字体：Cubic 11、站酷快乐体（SIL OFL 1.1）；rough.js（MIT）。
