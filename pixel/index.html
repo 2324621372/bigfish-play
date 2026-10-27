@@ -307,7 +307,7 @@ function stat(id) {
 // —— 一局 ——
 function newRun() {
   const sp = CFG.spec(G.save.spec);
-  const P = { x: 0, y: CFG.startY, vx: 0, vy: 0, ang: 0, dir: 1, L: sp.L0, L0: sp.L0, xp: 0, hp: stat('hp'), hpMax: stat('hp'), hunger: stat('belly'), hungerMax: stat('belly'), boost: 1, boosting: false, boostLock: false, face: 1, swim: 0, inv: 1.2, mouth: 0, hurtT: 0, growT: 0, starveT: 0, r: playerR(sp.L0), wob: 0 };
+  const P = { x: 0, y: CFG.startY, vx: 0, vy: 0, ang: 0, dir: 1, L: sp.L0, L0: sp.L0, xp: 0, hp: stat('hp'), hpMax: stat('hp'), hunger: stat('belly'), hungerMax: stat('belly'), boost: 1, boosting: false, boostLock: false, heal: 0, face: 1, swim: 0, inv: 1.2, mouth: 0, hurtT: 0, growT: 0, starveT: 0, r: playerR(sp.L0), wob: 0 };
   const run = { t: 0, P, fish: [], fx: [], floats: [], score: 0, combo: 0, comboT: 0, maxCombo: 0, frenzy: 0, fever: 0, feverN: 0, depth: 0, maxDepth: 0, zone: 0, qte: null, boss: null, lock: 0, over: 0, eaten: 0, newCodex: [], gold: 0, goldFish: 0, stomachUsed: false, hintT: G.save.hinted < 2 ? 9 : 0, timeLeft: CFG.timeLimit || 0, msg: null, nid: 1, slow: 1, shake: 0, flash: 0, zoom: 1, cam: { x: 0, y: CFG.startY }, bossDone: Object.assign({}, G.save.bossesRun || {}), events: {}, perfects: 0, bites: 0, spawnCd: 0, warnArrows: [] };
   run.zoom = zoomFor(P.L);
   G.run = run; G.state = 'play'; G.paused = false;
@@ -369,7 +369,7 @@ function mkFish(run, sp, x, y, gold) {
   sp = sp.ref || sp;
   const r = (sp.r || tierR(sp.tier)) * R(.92, 1.08);
   const dir = rnd() < .5 ? -1 : 1;
-  return { id: run.nid++, sp, x, y, vx: dir * sp.spd * 30, vy: 0, ang: 0, dir, face: dir, swim: R(0, 6), fleeT: 0, r, tier: sp.tier, t: R(0, 10), state: 'wander', st: 0, gold: !!gold, homeZone: sp.large ? sp.layer : undefined, layerResident: !!sp.large, cool: 0, aggro: 0, wx: x + R(-200, 200), wy: y, hp: sp.hp || 1, dead: 0, puff: 0 };
+  return { id: run.nid++, sp, x, y, vx: dir * sp.spd * 30, vy: 0, ang: 0, dir, face: dir, swim: R(0, 6), fleeT: 0, r, tier: sp.tier, t: R(0, 10), state: 'wander', st: 0, gold: !!gold, homeZone: sp.large ? sp.layer : undefined, layerResident: !!sp.large, cool: 0, aggro: 0, wx: x + R(-200, 200), wy: y, hp: sp.hp || 1, dead: CFG.habitable && !CFG.habitable(run, x, y) ? 1 : 0, puff: 0 };
 }
 // 关系：0 可吃 1 挑战 2 危险
 function relation(run, f) {
@@ -459,6 +459,7 @@ function updateFish(run, dt) {
   const P = run.P, view = Math.hypot(G.VW, G.VH) / 2 / run.zoom;
   for (const f of run.fish) {
     if (f.dead) continue;
+    if (CFG.habitable && !CFG.habitable(run, f.x, f.y)) { Layers.expire(run, f); continue; }
     f.t += dt; f.cool = Math.max(0, f.cool - dt); f.st += dt;
     const sp = f.sp, rel = relation(run, f), d = dist(f.x, f.y, P.x, P.y);
     if (d > view + (CFG.ver === "pixel" ? 380 : 700) && !f.keep) { f.dead = 1; continue; }
@@ -500,6 +501,7 @@ function updateFish(run, dt) {
     if (Math.abs(f.vx) > 6) f.dir = f.vx > 0 ? 1 : -1;
     f.ang = lerp(f.ang, clamp(Math.atan2(f.vy, Math.abs(f.vx)), -.8, .8), 1 - Math.exp(-dt * 5));
     f.swim = (f.swim || 0) + dt * (8 + Math.hypot(f.vx, f.vy) / 8); turnStep(f, dt);
+    if (CFG.habitable && !CFG.habitable(run, f.x, f.y)) { Layers.expire(run, f); continue; }
     // 碰撞
     if (run.over || run.qte || f.cool > 0) continue;
     const reach = P.r + f.r * (rel === 0 ? .55 : .35);
@@ -531,6 +533,7 @@ function hurt(run, n, why, f) {
 function endRun(run, why) { if (run.over) return; run.over = .001; run.why = why; if (run.qte) run.qte = null; AU.sfx(why === 'time' ? 'win' : 'over'); AU.duck(.4); }
 // 吞食
 function eat(run, f, how) {
+  if (run.over || f.dead || CFG.habitable && !CFG.habitable(run, f.x, f.y)) return;
   const P = run.P, sp = f.sp; f.dead = 1;
   const pts = Math.round((sp.pts || (f.tier + 1) * 10) * CFG.ptsMul(run) * (1 + Math.min(2, Math.floor(run.combo / 5) * .2)) * (run.fever > 0 ? 2 : 1) * (how === 'perfect' ? 2 : how === 'qte' ? 1.5 : 1) * (f.gold ? 5 : 1));
   run.score += pts; run.eaten++; run.combo++; run.comboT = 3; run.maxCombo = Math.max(run.maxCombo, run.combo);
@@ -975,17 +978,25 @@ const CFG = {
   diff: run => Math.min(4, run.zone * .45 + ((run.pursuit && run.pursuit.time) || 0) / 180 + ((run.pursuit && run.pursuit.residence) || 0) / 180 + run.depth / 5000),
   huntMul: run => .9 + CFG.diff(run) * .08,
   hungerDrain: run => 1.05 + run.zone * .16 + run.P.L * .08 + Math.min(.65, ((run.pursuit && run.pursuit.time) || 0) / 600) + (run.tideDanger ? 2.2 : 0),
+  habitable: (run, x, y) => Layers.habitable(run, x, y),
   foodRecovery(run, f, how) {
     // Relative body area: growing fish need several small prey, rather than one tiny snack.
     const area = (f.r / Math.max(1, run.P.r)) ** 2;
     const quality = how === 'perfect' ? 1.4 : how === 'qte' ? 1.2 : 1;
-    return { food: clamp(.28 * area, .018, .42) * quality, boost: clamp(.32 * area, .025, .48) * quality };
+    return { food: clamp(.28 * area, .018, .42) * quality, boost: clamp(.32 * area, .025, .48) * quality, heal: clamp(.5 * area, .025, .8) * quality };
   },
   feed(run, f, how) {
     const P = run.P, meal = CFG.foodRecovery(run, f, how);
     const food = Math.min(P.hungerMax - P.hunger, P.hungerMax * meal.food);
     const boost = Math.min(1 - P.boost, meal.boost);
     P.hunger += food; P.boost += boost;
+    if (P.hp < P.hpMax) {
+      P.heal = (P.heal || 0) + meal.heal;
+      const restored = Math.min(P.hpMax - P.hp, Math.floor(P.heal + 1e-6));
+      P.hp += restored; P.heal = Math.max(0, P.heal - restored);
+      if (restored) { floatText(run, P.x, P.y - P.r - 48, '回血 +' + restored + '♥', '#ff9db3', 1); fxAdd(run, 'grow', P.x, P.y, { life: .6 }); }
+      if (P.hp >= P.hpMax) P.heal = 0;
+    } else P.heal = 0;
     if (P.boostLock && P.boost >= .3) P.boostLock = false;
     if (food > .01 || boost > .001) floatText(run, P.x, P.y - P.r - 24, '饱食 +' + Math.round(food / P.hungerMax * 100) + '% · 冲刺 +' + Math.round(boost * 100) + '%', '#8affcf', .8);
   },
@@ -1092,6 +1103,20 @@ const Layers = {
     run.pursuit.anchorDepth = CFG.depthOf(run.P.y);
     run.scoreCheckpoint = run.score; run.pressure = 0; run.tideDanger = false;
   },
+  oxygenFront(run) {
+    let front = -Infinity;
+    for (const layer of run.layers || []) if (layer.storm && layer.storm.elapsed >= Layers.warningTime) front = Math.max(front, layer.storm.front * M2Y);
+    return front;
+  },
+  habitable(run, x, y) { return y > Layers.oxygenFront(run); },
+  expire(run, f) {
+    if (!f.dead) { f.dead = 1; fxAdd(run, 'oxygen', f.x, f.y, { r: f.r, life: .7 }); }
+  },
+  clearWater(run) {
+    if (!Number.isFinite(Layers.oxygenFront(run))) return;
+    for (const f of run.fish) if (!Layers.habitable(run, f.x, f.y)) Layers.expire(run, f);
+    run.fish = run.fish.filter(f => !f.dead);
+  },
   pool(zone) { return SPECIES.filter(s => s.large && s.layer === zone); },
   residentSpecies(run, species) {
     return Object.assign({}, species, { tier: Math.max(species.tier, run.P.L + 3), r: Math.max(tierR(species.tier), run.P.r * 1.3) });
@@ -1119,7 +1144,7 @@ const Layers = {
       const ty = Math.abs(dy) < 1e-6 ? Infinity : ((dy > 0 ? bottom : top) - P.y) / dy;
       const reach = Math.min(tx, ty);
       const c = CFG.clampSpawn(P.x + dx * reach, P.y + dy * reach, species);
-      if (Layers.offscreen(run, c[0], c[1], margin) && dist(c[0], c[1], P.x, P.y) > Math.max(160, P.r * 3)) return c;
+      if (Layers.habitable(run, c[0], c[1]) && Layers.offscreen(run, c[0], c[1], margin) && dist(c[0], c[1], P.x, P.y) > Math.max(160, P.r * 3)) return c;
     }
     // If no legal edge is available, defer the spawn instead of showing a teleport.
     return null;
@@ -1177,6 +1202,7 @@ const Layers = {
     }
     const h = run.pursuit;
     run.tideDanger = false;
+    Layers.clearWater(run);
     if (run.over || run.qte || run.boss) return h;
     h.entryGrace = Math.max(0, h.entryGrace - dt); h.time += dt; h.residence += dt;
     if (Math.abs(run.depth - h.anchorDepth) >= 90) { h.anchorDepth = run.depth; h.residence = Math.max(0, h.residence - 35); }
@@ -1196,6 +1222,7 @@ const Layers = {
         if (tide.damageT >= 2.4 && run.P.inv <= 0) { tide.damageT = 0; hurt(run, 1, 'tide'); }
       } else tide.damageT = 0;
     }
+    Layers.clearWater(run);
     h.ecologyCd -= dt;
     if (h.ecologyCd <= 0 && h.time >= 6) {
       h.ecologyCd = 3;
@@ -1213,6 +1240,8 @@ const Layers = {
 // ==== pixel/i18n.js ====
 // All canvas text passes through this dictionary; game IDs and saved data stay language independent.
 const EN_TEXT = {
+  "回血进度 ": "Regen ",
+  "回血 +": "Healed +",
   "饱食 +": "Food +",
   "% · 冲刺 +": "% · Boost +",
   "吃鱼回气": "Eat fish",
@@ -1546,6 +1575,7 @@ Object.assign(BOSS, {
   start(run, def) {
     const P = run.P;
     const b = { native: true, def, id: def.id, hp: def.hp, hpMax: def.hp, cx: clamp(P.x, -CFG.W / 2 + 200, CFG.W / 2 - 200), cy: Math.max(160, P.y - 170), phase: 'intro', pt: 0, duration: 2.2, k: 0, bpm: def.bpm, ten: [], hitT: 0, dead: 0, noSpawn: true, pull: null, t: 0, foodT: 0, awayT: 0, scale: def.id === 'kraken' ? 1.8 : 1.3 };
+    if (!Layers.habitable(run, b.cx, b.cy)) return;
     const origin = Layers.outside(run, { tier: 0, dy: [50, Infinity] }, -Math.PI / 2, 150 * b.scale);
     if (!origin) return;
     b.entryX = b.x = origin[0]; b.entryY = b.y = origin[1]; run.boss = b;
@@ -1561,6 +1591,9 @@ Object.assign(BOSS, {
     const b = run.boss, P = run.P;
     b.t += dt; if (!run.qte && !run.over) b.pt += dt; b.hitT = Math.max(0, b.hitT - dt);
     if (b.dead) { b.dead += dt; if (b.dead > 2.2) { run.boss = null; musicFor(run); } return; }
+    if (!Layers.habitable(run, b.x, b.y)) {
+      run.events['bossRetry:' + b.id] = run.t + 40; run.boss = null; musicFor(run); return;
+    }
     if (run.over || run.qte) return;
     // Swimming away is always possible. A retreat neither kills nor rewards the Boss.
     b.awayT = dist(P.x, P.y, b.x, b.y) > 760 ? b.awayT + dt : 0;
@@ -1976,6 +2009,7 @@ function drawSpr(g, e, sx, sy, face, ang, white2) {
   g.save(); g.translate(Math.round(sx), Math.round(sy)); g.rotate(rot); g.scale(k, 1); g.drawImage(im, -Math.round(e.w / 2), -Math.round(e.h / 2)); g.restore();
 }
 function drawFish(run, f) {
+  if (f.dead) return;
   const g = W.lg, z = run.zoom, sx = W.sx(f.x), sy = W.sy(f.y);
   const padding = (f.r * 3 + 24) * z / PXS;
   if (sx < -padding || sx > W.LW + padding || sy < -padding || sy > W.LH + padding) return;
@@ -2067,6 +2101,11 @@ function drawFx(run) {
   const g = W.lg, z = run.zoom;
   for (const e of run.fx) {
     const sx = W.sx(e.x), sy = W.sy(e.y), k = e.t / e.life;
+    if (e.k === 'oxygen') {
+      g.save(); g.globalAlpha = 1 - k; g.strokeStyle = '#a6c7d5'; g.lineWidth = 1;
+      for (let i = 0; i < 5; i++) { g.beginPath(); g.arc(sx + Math.sin(i * 2 + k * 3) * e.r * z * .5, sy - k * 30 * z + i * 3, 1 + i % 2, 0, Math.PI * 2); g.stroke(); }
+      g.restore();
+    }
     if (e.k === 'gulp') { const n = 8; for (let i = 0; i < n; i++) { const a = i / n * 6.28, r = (4 + k * 14) * Math.max(.6, e.r * z / 14); g.fillStyle = i % 2 ? e.col : '#ffffff'; g.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r), 1, 1); } }
     if (e.k === 'grow') { g.strokeStyle = `rgba(122,255,154,${1 - k})`; g.lineWidth = 1; g.beginPath(); g.arc(Math.round(sx), Math.round(sy), 6 + k * 40, 0, 7); g.stroke(); }
     if (e.k === 'boom') { for (let i = 0; i < 24; i++) { const a = i * .26, r = k * 90 * z; g.fillStyle = i % 3 ? '#ffe85a' : '#ff6a3a'; g.fillRect(Math.round(sx + Math.cos(a) * r), Math.round(sy + Math.sin(a) * r), 2, 2); } }
@@ -2111,9 +2150,9 @@ W.render = function (x) {
   if (run.flash > 0) { x.fillStyle = `rgba(255,40,40,${run.flash * .35})`; x.fillRect(0, 0, G.VW, G.VH); }
   const P = run.P;
   if (P.hunger < P.hungerMax * .25 && !run.over) { const a = (.25 - P.hunger / P.hungerMax) * 2 * (.6 + Math.sin(run.t * 6) * .4); const vg = x.createRadialGradient(G.VW / 2, G.VH / 2, G.VH * .3, G.VW / 2, G.VH / 2, G.VH * .65); vg.addColorStop(0, 'rgba(255,0,30,0)'); vg.addColorStop(1, `rgba(255,0,30,${a})`); x.fillStyle = vg; x.fillRect(0, 0, G.VW, G.VH); }
-  const tide = run.pursuit.storm;
-  if (tide && tide.elapsed >= Layers.warningTime && !run.boss) {
-    const edge = scY(tide.front * M2Y), covered = clamp(edge, 0, G.VH);
+  const front = Layers.oxygenFront(run);
+  if (Number.isFinite(front)) {
+    const edge = scY(front), covered = clamp(edge, 0, G.VH);
     x.save(); x.fillStyle = 'rgba(104,32,82,.24)'; x.fillRect(0, 0, G.VW, covered);
     if (edge > 0 && edge < G.VH) {
       x.strokeStyle = '#ffad8c'; x.lineWidth = 2; x.beginPath(); x.moveTo(0, edge); x.lineTo(G.VW, edge); x.stroke();
@@ -2204,6 +2243,7 @@ function drawHUD(x, run) {
   }
   // 血
   for (let i = 0; i < P.hpMax; i++) ptx(x, i < P.hp ? '♥' : '♡', 14 + i * 20, top + (run.boss ? 66 : 66), 18, i < P.hp ? '#ff4a5a' : '#7a3a40', { noStroke: i >= P.hp });
+  if (P.hp < P.hpMax && P.heal > 0) ptx(x, '回血进度 ' + Math.floor(P.heal * 100) + '%', 18 + P.hpMax * 20, top + 66, 10, '#ffb3c4', { noStroke: 1, maxWidth: 110 });
   if (!run.boss) {
     pxPanel(x, 254, top, VW - 262, 50);
     ptx(x, fmt(run.score), VW - 20, top + 17, 22, '#ffffff', { align: 'right', noStroke: 1 });
