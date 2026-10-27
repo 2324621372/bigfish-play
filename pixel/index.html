@@ -456,7 +456,7 @@ function updateFish(run, dt) {
     else if (rel === 2 && (sp.beh === 'hunter' || sp.beh === 'ambush' || sp.beh === 'grab') && !run.over && P.inv <= 0 && (d < (sp.beh === 'ambush' ? 360 : 260) || f.state === 'hunt' || f.state === 'tele') && f.aggro >= 0 && f.aggro < sp.chase) {
       if (f.state !== 'hunt' && f.state !== 'tele') { f.state = 'hunt'; f.st = 0; if (sp.beh === 'ambush') { f.state = 'tele'; } }
       if (f.state === 'tele') { tx = P.x - f.x; ty = P.y - f.y; spd *= .2; if (f.st > .9) { f.state = 'hunt'; f.st = 0; f.dash = 1; } }
-      else { f.aggro += dt; tx = P.x + P.vx * .4 - f.x; ty = P.y + P.vy * .4 - f.y; spd *= (sp.beh === 'ambush' && f.st < .8 ? 3.4 : 1.25) * CFG.huntMul(run); turn = sp.beh === 'ambush' && f.st < .8 ? .6 : 3; }
+      else { f.aggro += dt; tx = P.x + P.vx * .4 - f.x; ty = P.y + P.vy * .4 - f.y; spd *= (sp.beh === 'ambush' && f.st < .8 ? 3.4 : 1.25) * CFG.huntMul(run); turn = sp.beh === 'ambush' && f.st < .8 ? .6 : 3; if (f.eventHunter && CFG.pursuitSpeed) spd = CFG.pursuitSpeed(run); }
     } else {
       if (f.state === 'hunt' && f.aggro >= sp.chase) { f.aggro = -3; }
       if (f.aggro < 0) f.aggro = Math.min(0, f.aggro + dt * .65);
@@ -477,7 +477,7 @@ function updateFish(run, dt) {
       }
     }
     const tl = Math.hypot(tx, ty) || 1, k = 1 - Math.exp(-dt * turn);
-    f.vx = lerp(f.vx, tx / tl * spd, k); f.vy = lerp(f.vy, ty / tl * spd * (sp.beh === 'jelly' ? 1 : .7), k);
+    f.vx = lerp(f.vx, tx / tl * spd, k); f.vy = lerp(f.vy, ty / tl * spd * (sp.beh === 'jelly' || f.eventHunter ? 1 : .7), k);
     const previous = { x: f.x, y: f.y };
     f.x += f.vx * dt; f.y += f.vy * dt;
     const c = CFG.clampSpawn(f.x, f.y, sp); f.x = c[0]; f.y = c[1];
@@ -949,7 +949,8 @@ const CFG = {
   bound(run, P) {
     const lim = CFG.W / 2 - 40 - P.r * .4; if (P.x < -lim) { P.x = -lim; P.vx = Math.max(0, P.vx); } if (P.x > lim) { P.x = lim; P.vx = Math.min(0, P.vx); } if (P.y < 30) { P.y = 30; P.vy = Math.max(0, P.vy); } },
   camClamp(run) { const hh = G.VH / 2 / run.zoom; run.cam.y = Math.max(run.cam.y, hh * .7); },
-  onStart(run) { run.unlocked = 0; run.pursuit = { phase: 'calm', left: 24, wave: 0, level: 1, residence: 0, anchorDepth: CFG.depthOf(run.P.y) }; run.pressure = 0; },
+  onStart(run) { run.unlocked = 0; run.pursuit = { phase: 'calm', left: 3, wave: 0, level: 1, residence: 0, anchorDepth: CFG.depthOf(run.P.y) }; run.pressure = 0; },
+  pursuitSpeed(run) { return (CFG.baseSpd + run.P.L * 6) * stat('spd') * (1.45 + Math.min(.2, (((run.pursuit && run.pursuit.level) || 1) - 1) * .04)); },
   musicMod(run) { const level = run.pursuit ? run.pursuit.level : 1; return { bpm: ZONES[run.zone].bpm + (level - 1) * 2 + (run.pressure || 0) * 12, int: Math.min(3, ZONES[run.zone].int + Math.floor((level - 1) / 3) + (run.pressure > .4 ? 1 : 0)) }; },
   update(run, dt) {
     // 记录探索过的最深场景，保留成长和首次进入补给奖励。
@@ -968,21 +969,30 @@ const CFG = {
       h.left -= dt;
       if (h.left <= 0) {
         if (h.phase === 'calm') {
-          h.phase = 'warning'; h.left = 3; say(run, '掠食者靠近 · 留好冲刺体力!', '#ffb46a', 2.8); AU.sfx('boss');
+          h.phase = 'warning'; h.left = h.wave === 0 ? 2 : 2.5; say(run, '掠食者靠近 · 留好冲刺体力!', '#ffb46a', 2.8); AU.sfx('boss');
         } else if (h.phase === 'warning') {
-          h.phase = 'hunt'; h.left = 10 + Math.min(5, (h.level - 1) * 1.1); h.wave++;
+          h.phase = 'hunt'; h.left = h.wave === 0 ? 7 : 10 + Math.min(5, (h.level - 1) * 1.1); h.wave++;
           // Migrating hunters scale above the player even in shallow water.
           const source = SPECIES.filter(s => s.beh === 'hunter' && !s.special && run.depth >= s.d[0] - 160 && run.depth <= s.d[1]);
           const base = source[0] || SPECIES.find(s => s.id === 'barracuda');
           const count = h.level >= 6 ? 3 : h.level >= 3 ? 2 : 1;
           const chaseScale = 38 * (1 + CFG.diff(run) * .16) * 1.25 * CFG.huntMul(run);
-          const speed = Math.min(2.8, 1.9 + h.level * .1, (CFG.baseSpd + run.P.L * 6) * stat('spd') * 1.55 / chaseScale);
+          const speed = CFG.pursuitSpeed(run) / chaseScale;
           for (let i = 0; i < count; i++) {
             const sp = Object.assign({}, base, { tier: Math.max(base.tier, run.P.L + 3), dy: [0, Infinity], d: [0, Infinity], chase: h.left + 2, spd: speed, beh: 'hunter' });
-            const side = run.P.x > 0 ? -1 : 1, gap = G.VW / 2 / run.zoom + 110;
-            const c = CFG.clampSpawn(run.P.x + side * gap, run.P.y + (i - (count - 1) / 2) * 155, sp);
+            const P = run.P, moving = Math.hypot(P.vx, P.vy) > 20;
+            const behind = (moving ? Math.atan2(P.vy, P.vx) : P.dir < 0 ? Math.PI : 0) + Math.PI + (i - (count - 1) / 2) * .65;
+            const hw = G.VW / 2 / run.zoom, hh = G.VH / 2 / run.zoom;
+            const positions = [0, Math.PI / 2, -Math.PI / 2, Math.PI].map(offset => {
+              const a = behind + offset, gap = 1 / Math.hypot(Math.cos(a) / hw, Math.sin(a) / hh) + 110;
+              return CFG.clampSpawn(P.x + Math.cos(a) * gap, P.y + Math.sin(a) * gap, sp);
+            });
+            const c = positions.find(c => dist(c[0], c[1], P.x, P.y) > Math.max(160, P.r * 3) && (Math.abs(c[0] - P.x) > hw + 20 || Math.abs(c[1] - P.y) > hh + 20)) || positions[0];
             const f = mkFish(run, sp, c[0], c[1], false);
             f.r = Math.min(44, Math.max(26, run.P.r * 1.2));
+            const aim = Math.atan2(P.y - f.y, P.x - f.x), chaseSpeed = CFG.pursuitSpeed(run);
+            f.vx = Math.cos(aim) * chaseSpeed; f.vy = Math.sin(aim) * chaseSpeed;
+            f.face = f.dir = f.vx >= 0 ? 1 : -1; f.ang = clamp(Math.atan2(f.vy, Math.abs(f.vx)), -.8, .8);
             f.eventHunter = true; f.state = 'hunt'; run.fish.push(f);
           }
         } else if (h.phase === 'hunt') {
@@ -992,7 +1002,7 @@ const CFG = {
           say(run, '逃离追猎! 补给鱼群出现', '#7affc8', 2.4);
           const food = CFG.bossFood(run);
           for (let i = 0; i < 8; i++) { const c = CFG.clampSpawn(run.P.x + R(-100, 100), run.P.y + R(-100, 100), food); run.fish.push(mkFish(run, food, c[0], c[1], false)); }
-        } else { h.phase = 'calm'; h.left = Math.max(7, 23 - h.level * 2); }
+        } else { h.phase = 'calm'; h.left = Math.max(5, 14 - h.level * 1.2); }
       }
     }
     const pressure = h.phase === 'hunt' ? 1 : h.phase === 'warning' ? .6 : 0;
