@@ -378,8 +378,8 @@ function relation(run, f) {
   if (f.tier <= L) return 0; if (f.tier === L + 1) return 1; return 2;
 }
 // —— 每帧更新 ——
-function stepRun(run, rdt) {
-  const P = run.P;
+function stepRun(run, rdt, environmentDt = rdt) {
+  const P = run.P, startedInQTE = !!run.qte;
   P.prevX = P.x; P.prevY = P.y;
   if (run.qte) QTE.update(rdt);
   run.slow = lerp(run.slow, run.qte ? .22 : (run.over ? .35 : 1), 1 - Math.exp(-rdt * 10));
@@ -426,7 +426,7 @@ function stepRun(run, rdt) {
   // 深度 / 区域
   run.depth = CFG.depthOf(P.y); run.maxDepth = Math.max(run.maxDepth, run.depth);
   const z = CFG.zoneOf(run); if (z !== run.zone) { run.zone = z; const Z = CFG.ZONES[z]; say(run, Z.enter || Z.name, Z.col, 2.6); musicFor(run); }
-  CFG.update && CFG.update(run, dt);
+  CFG.update && CFG.update(run, dt, startedInQTE ? 0 : environmentDt);
   if (run.boss) BOSS.update(run, dt);
   // 生成
   run.spawnCd -= dt;
@@ -1146,14 +1146,14 @@ const CFG = {
   onStart(run) { run.unlocked = 0; run.loot = []; run.relics = 0; Layers.start(run); Guide.start(run); },
   pursuitSpeed(run) { return (CFG.baseSpd + run.P.L * 6) * stat('spd') * (1.45 + Math.min(.2, (((run.pursuit && run.pursuit.level) || 1) - 1) * .04)); },
   musicMod(run) { const level = run.pursuit ? run.pursuit.level : 1; return { bpm: ZONES[run.zone].bpm + (level - 1) * 2 + (run.pressure || 0) * 12 + (run.tideDanger ? 8 : 0), int: Math.min(3, ZONES[run.zone].int + Math.floor((level - 1) / 3) + (run.pressure > .4 ? 1 : 0)) }; },
-  update(run, dt) {
+  update(run, dt, oxygenDt = dt) {
     // 记录探索过的最深场景，保留成长和首次进入补给奖励。
     const reached = CFG.zoneOf(run);
     if (reached > run.unlocked) {
       run.unlocked = reached;
       run.P.hunger = Math.min(run.P.hungerMax, run.P.hunger + 25);
     }
-    const h = Layers.update(run, dt);
+    const h = Layers.update(run, dt, oxygenDt);
     Loot.update(run, dt);
     Guide.update(run, dt);
     if (!run.boss && !run.qte && !run.over) {
@@ -1231,12 +1231,30 @@ const Layers = {
   stay: [45, 43, 41, 39, 37, 35, 33, 30, Infinity],
   warningTime: 12,
   limit(h) { return Layers.stay[h.zone]; },
-  remaining(h) { return Math.max(0, Layers.limit(h) - h.time); },
+  backgroundDrain: .6,
+  remaining(h) { return Math.max(0, Layers.limit(h) - h.oxygenElapsed); },
   start(run) {
-    run.layers = ZONES.map((zone, index) => ({ zone: index, phase: 'calm', left: 3, wave: 0, level: 1, time: 0, score: 0, residence: 0, anchorDepth: zone.from, entryGrace: 3, ecologyCd: 8, storm: null, visited: false, resumeLeft: null }));
+    run.layers = ZONES.map((zone, index) => ({ zone: index, phase: 'calm', left: 3, wave: 0, level: 1, time: 0, oxygenElapsed: 0, lastDepth: zone.from, score: 0, residence: 0, anchorDepth: zone.from, entryGrace: 3, ecologyCd: 8, storm: null, visited: false, resumeLeft: null }));
     run.layerZone = 0; run.pursuit = run.layers[0]; run.pursuit.visited = true;
     run.pursuit.anchorDepth = CFG.depthOf(run.P.y);
-    run.scoreCheckpoint = run.score; run.pressure = 0; run.tideDanger = false;
+    run.scoreCheckpoint = run.score; run.pressure = 0; run.tideDanger = false; run.deepestLayer = 0; run.oxygenDamageT = 0;
+  },
+  advanceOxygen(run, seconds) {
+    // Independent, monotonic clock. Only explored shallower water ages in the background.
+    const elapsed = Math.max(0, seconds);
+    for (const layer of run.layers) {
+      const active = layer.zone === run.layerZone;
+      if (!active && layer.zone >= run.deepestLayer) continue;
+      const next = ZONES[layer.zone + 1]; if (!next) continue;
+      const delta = elapsed * (active ? 1 : Layers.backgroundDrain);
+      layer.oxygenElapsed = Math.min(Layers.limit(layer), layer.oxygenElapsed + delta);
+      if (!layer.storm && Layers.remaining(layer) <= 0) {
+        const startFront = Math.max(ZONES[layer.zone].from, Math.min(layer.lastDepth - 90, next.from - 120));
+        layer.storm = { elapsed: 0, startFront, front: ZONES[layer.zone].from, damageT: 0 };
+        if (active) { say(run, '本层氧气耗尽 · 缺氧潮将至，向下寻找新水域!', '#ffbb80', 4); AU.sfx('boss'); }
+      } else if (layer.storm) layer.storm.elapsed += delta;
+      if (layer.storm) layer.storm.front = Math.min(next.from + 24, layer.storm.startFront + Math.max(0, layer.storm.elapsed - Layers.warningTime) * (18 + layer.zone * 3));
+    }
   },
   oxygenFront(run) {
     let front = -Infinity;
@@ -1333,7 +1351,7 @@ const Layers = {
       f.eventHunter = true; f.homeZone = h.zone; f.layerResident = false; f.state = 'hunt'; run.fish.push(f);
     }
   },
-  update(run, dt) {
+  update(run, dt, oxygenDt = dt) {
     const previous = run.layers[run.layerZone];
     // Attribute score to the layer where it was earned, before switching the active state.
     previous.score += Math.max(0, run.score - run.scoreCheckpoint); run.scoreCheckpoint = run.score;
@@ -1349,6 +1367,7 @@ const Layers = {
       run.layerZone = zone; run.pursuit = next;
     }
     const h = run.pursuit;
+    run.deepestLayer = Math.max(run.deepestLayer, zone); h.lastDepth = run.depth;
     run.tideDanger = false;
     Layers.clearWater(run);
     if (run.over || run.qte || run.boss) return h;
@@ -1356,22 +1375,14 @@ const Layers = {
     if (Math.abs(run.depth - h.anchorDepth) >= 90) { h.anchorDepth = run.depth; h.residence = Math.max(0, h.residence - 35); }
     h.level = Math.min(7, 1 + Math.floor(h.time / 75) + Math.floor(h.residence / 55) + Math.floor(zone / 2));
     const next = ZONES[zone + 1];
-    if (!h.storm && next && h.time >= Layers.limit(h)) {
-      h.storm = { elapsed: 0, startFront: Math.max(ZONES[zone].from, Math.min(run.depth - 90, next.from - 120)), front: ZONES[zone].from, damageT: 0 };
-      say(run, '本层氧气耗尽 · 缺氧潮将至，向下寻找新水域!', '#ffbb80', 4);
-      AU.sfx('boss');
-    } else if (h.storm) h.storm.elapsed += dt;
-    // 倒计时最后 10 秒：每秒一声提示
+    Layers.advanceOxygen(run, oxygenDt);
     if (!h.storm && next) { const left = Layers.remaining(h); if (left <= 10 && Math.ceil(left) !== h.lastTick) { h.lastTick = Math.ceil(left); AU.sfx('tick'); } }
-    if (h.storm) {
-      const tide = h.storm;
-      tide.front = Math.min(next.from + 24, tide.startFront + Math.max(0, tide.elapsed - Layers.warningTime) * (18 + zone * 3));
-      run.tideDanger = tide.elapsed >= Layers.warningTime && run.depth <= tide.front;
-      if (run.tideDanger && h.entryGrace <= 0) {
-        tide.damageT += dt;
-        if (tide.damageT >= 2.4 && run.P.inv <= 0) { tide.damageT = 0; hurt(run, 1, 'tide'); }
-      } else tide.damageT = 0;
-    }
+    // Any depleted shallow layer stays dangerous when revisited, even from another layer.
+    run.tideDanger = run.P.y <= Layers.oxygenFront(run);
+    if (run.tideDanger && h.entryGrace <= 0) {
+      run.oxygenDamageT += dt;
+      if (run.oxygenDamageT >= 2.4 && run.P.inv <= 0) { run.oxygenDamageT = 0; hurt(run, 1, 'tide'); }
+    } else run.oxygenDamageT = 0;
     Layers.clearWater(run);
     h.ecologyCd -= dt;
     if (h.ecologyCd <= 0 && h.time >= 6) {
@@ -2813,6 +2824,7 @@ function hudAlert(run) {
     return { text: b.dead ? '巨兽已击败' : b.phase === 'expose' ? (b.bitten ? '弱点命中!' : '弱点暴露 · ' + BossRules.howTo(b)) : BOSS.hint(b), col: b.phase === 'expose' ? '#97f5b0' : '#ffd1a1' };
   }
   if (h.storm) return { text: h.storm.elapsed < Layers.warningTime ? '缺氧潮将在 ' + Math.ceil(Layers.warningTime - h.storm.elapsed) + '秒后推进' : '缺氧潮推进 · 立即向下游动', col: '#ffad8d', dive: true };
+  if (run.tideDanger) return { text: '缺氧潮推进 · 立即向下游动', col: '#ffad8d', dive: true, safeDepth: Layers.oxygenFront(run) / M2Y + 12 };
   if (Layers.remaining(h) <= 10) return { text: '氧气将尽，向下游到新海域', col: '#ffbd89', dive: true };
   if (h.phase === 'warning' || h.phase === 'hunt') return { text: h.phase === 'warning' ? '掠食者接近 · ' + Math.ceil(h.left) : '正在被追猎 · 坚持 ' + Math.ceil(h.left) + '秒', col: '#ffb29a' };
   if (run.P.hunger / run.P.hungerMax < .2) return { text: '饥饿了，寻找小鱼', col: '#ffd27f' };
@@ -3255,7 +3267,8 @@ function drawHUD(x, run) {
     const height = 12 + lines.length * 15 + (alert.dive ? 16 : 0);
     pxPanel(x, 24, 118, VW - 48, height, 'rgba(10,25,36,.84)', alert.col);
     lines.forEach((line, i) => ptx(x, line, VW / 2, 132 + i * 15, 11, alert.col, { align: 'center', noStroke: 1, maxWidth: VW - 70 }));
-    if (alert.dive && ZONES[run.zone + 1]) ptx(x, '▼ ' + Math.max(0, Math.ceil(ZONES[run.zone + 1].from - run.depth)) + 'm · ' + ZONES[run.zone + 1].name, VW / 2, 132 + lines.length * 15, 10, '#bbdfe9', { align: 'center', noStroke: 1, maxWidth: VW - 70 });
+    if (alert.safeDepth != null) ptx(x, '▼ 距安全水域 ' + Math.max(0, Math.ceil(alert.safeDepth - run.depth)) + 'm', VW / 2, 132 + lines.length * 15, 10, '#bbdfe9', { align: 'center', noStroke: 1, maxWidth: VW - 70 });
+    else if (alert.dive && ZONES[run.zone + 1]) ptx(x, '▼ ' + Math.max(0, Math.ceil(ZONES[run.zone + 1].from - run.depth)) + 'm · ' + ZONES[run.zone + 1].name, VW / 2, 132 + lines.length * 15, 10, '#bbdfe9', { align: 'center', noStroke: 1, maxWidth: VW - 70 });
   }
   if (run.combo >= 3 && !run.qte) {
     ptx(x, 'x' + run.combo, 24, VH - 111, 20, '#f9de93', { noStroke: 1, maxWidth: 85 });
@@ -3559,14 +3572,16 @@ SCR.codex = x => {
 // ==== main.js ====
 // 启动与主循环：打开即开局（无封面），首次触摸时开启音频
 function frame(ts) {
-  const t = ts / 1000, rdt = Math.min(.05, Math.max(0, t - (G.t || t))); G.t = t; G.dt = rdt;
+  const t = ts / 1000, elapsed = Math.max(0, t - (G.t || t)), rdt = Math.min(.05, elapsed); G.t = t; G.dt = rdt;
   if (!G.freeze) {
     AU.tick();
-    if (G.state === 'play' && !G.paused && G.run) { try { stepRun(G.run, rdt); } catch (e) { console.error(e); } }
+    if (G.state === 'play' && !G.paused && !document.hidden && G.run) { try { stepRun(G.run, rdt, elapsed); } catch (e) { console.error(e); } }
   }
   draw();
   requestAnimationFrame(frame);
 }
+// Reset the frame origin on background/resume; hidden time is never charged to oxygen.
+document.addEventListener('visibilitychange', () => { G.t = 0; });
 function draw() {
   const x = G.x; UI.begin();
   x.setTransform(1, 0, 0, 1, 0, 0); x.fillStyle = CFG.letterbox || '#000'; x.fillRect(0, 0, G.cv.width, G.cv.height);
