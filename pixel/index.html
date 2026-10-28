@@ -462,11 +462,24 @@ function updateFish(run, dt) {
     if (CFG.habitable && !CFG.habitable(run, f.x, f.y)) { Layers.expire(run, f); continue; }
     f.t += dt; f.cool = Math.max(0, f.cool - dt); f.st += dt;
     const sp = f.sp, rel = relation(run, f), d = dist(f.x, f.y, P.x, P.y);
-    if (d > view + (CFG.ver === "pixel" ? 380 : 700) && !f.keep) { f.dead = 1; continue; }
+    if (!f.retreat && d > view + (CFG.ver === "pixel" ? 380 : 700) && !f.keep) { f.dead = 1; continue; }
     let tx = 0, ty = 0, spd = sp.spd * 38 * (1 + CFG.diff(run) * .16), turn = 2.8;
     // 行为
     if (f.state === 'grab') { f.x = lerp(f.x, P.x + f.gx, .2); f.y = lerp(f.y, P.y + f.gy, .2); continue; }
-    if (f.retreat) { tx = f.x - P.x || f.dir; ty = f.y - P.y; spd *= 1.6; f.cool = Math.max(f.cool, .2); f.retreatT = (f.retreatT || 0) + dt; if (f.retreatT > 3) f.dead = 1; }
+    if (f.retreat) {
+      // Keep the whole sprite alive until it has swum beyond the real camera.
+      const margin = Math.max(28, f.r * 3 + 24);
+      const hw = G.VW / 2 / run.zoom, hh = G.VH / 2 / run.zoom;
+      if (Math.abs(f.x - run.cam.x) > hw + margin || Math.abs(f.y - run.cam.y) > hh + margin) { f.dead = 1; continue; }
+      if (!f.retreatDir) {
+        const away = f.x < P.x ? -1 : f.x > P.x ? 1 : f.dir;
+        // Near a world wall, take the other edge instead of swimming into the wall.
+        f.retreatDir = run.cam.x + away * (hw + margin + 40) > CFG.W / 2 ? -1 : run.cam.x + away * (hw + margin + 40) < -CFG.W / 2 ? 1 : away;
+      }
+      tx = f.retreatDir; ty = 0; turn = 2.8;
+      spd = Math.max(spd * 1.6, (CFG.baseSpd + P.L * 6) * stat('spd') * 1.15);
+      f.state = 'wander'; f.aggro = -100; f.cool = Math.max(f.cool, .2);
+    }
     else if (f.eventHunter && f.homeZone >= 5 && CFG.ver === 'pixel') { const motion = Layers.huntMotion(run, f, dt); tx = motion.x; ty = motion.y; spd = motion.speed; turn = f.homeZone === 6 ? 2.2 : 3.5; }
     else if (sp.beh === 'jelly') { tx = Math.sin(f.t * .3 + f.id) * .3; ty = Math.sin(f.t * 1.4 + f.id) > .6 ? -1 : .25; spd *= .5; }
     // 逃跑有体力：先冲一下，1.4 秒后累了变慢，玩家加速一定追得上
@@ -1824,7 +1837,7 @@ Object.assign(BOSS, {
     if (!origin) return;
     b.entryX = b.x = origin[0]; b.entryY = b.y = origin[1]; run.boss = b;
     // Background hunters leave the encounter; supplies remain edible.
-    for (const f of run.fish) if (relation(run, f) === 2) f.dead = 1;
+    for (const f of run.fish) if (relation(run, f) === 2) { f.retreat = true; f.state = 'wander'; f.aggro = -100; f.cool = Math.max(.2, f.cool); }
     AU.sfx('boss'); say(run, def.family ? BOSS.hint(b) : b.id === 'kraken' ? '留意抬起的触手 · 躲开后咬眼睛' : '留意张嘴蓄力 · 绕到侧面咬诱饵灯', '#b8ffcf', 4); musicFor(run);
   },
   weak(b) {
