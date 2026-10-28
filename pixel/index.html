@@ -1484,7 +1484,8 @@ const EN_TEXT = {
   "回血 +": "Healed +",
   "饱食 +": "Food +",
   "% · 冲刺 +": "% · Boost +",
-  "吃鱼回气": "Eat fish",
+  "饱食": "FOOD",
+  "吃鱼补体力": "Eat for boost",
   "巨型石斑": "Giant Grouper",
   "黑鳍鲨": "Blacktip Shark",
   "巨型鲹": "Giant Trevally",
@@ -3157,8 +3158,8 @@ function drawHUD(x, run) {
     for (let i = 0; i < n; i++) { const v = b.hp / b.hpMax * n; x.fillStyle = i < v - 1e-6 ? (i < n * .3 ? '#ff3a4a' : '#ff6a4a') : '#3a1018'; x.fillRect(18 + i * segW, top + 28, segW - 2, 12); if (i < v) { x.fillStyle = 'rgba(255,255,255,.35)'; x.fillRect(18 + i * segW, top + 28, segW - 2, 3); } }
   } else {
     pxPanel(x, 8, top, 236, 50);
-    // 鱼骨图标 + 饥饿条
-    x.fillStyle = '#ffd23a'; x.fillRect(14, top + 14, 16, 2); for (let i = 0; i < 3; i++) x.fillRect(16 + i * 4, top + 10, 2, 10); x.fillRect(30, top + 11, 4, 8);
+    // Label food separately from the oxygen countdown below.
+    ptx(x, '饱食', 14, top + 16, 9, '#ffd23a', { noStroke: 1, maxWidth: 24 });
     const hv = P.hunger / P.hungerMax * 16, low = P.hunger < P.hungerMax * .25;
     for (let i = 0; i < 16; i++) { x.fillStyle = '#04101e'; x.fillRect(40 + i * 12, top + 8, 10, 14); x.fillStyle = i < hv - .01 ? (i < 4 ? '#ff4a3a' : i < 8 ? '#ff9a2a' : '#ffd23a') : '#1a2a3a'; if (low && i < hv && (run.t * 6 | 0) % 2) x.fillStyle = '#ffffff'; x.fillRect(42 + i * 12, top + 10, 6, 10); }
     const spec = CFG.spec(G.save.spec);
@@ -3225,7 +3226,7 @@ function drawHUD(x, run) {
   x.fillStyle = on ? '#2a8ad8' : lockd ? '#2a3444' : 'rgba(10,40,70,.85)'; x.beginPath(); x.arc(bx, by, br, 0, 7); x.fill();
   for (let a2 = 0; a2 < 6.28; a2 += .1) { const k = a2 / 6.28 < P.boost; x.fillStyle = k ? (lockd ? '#ff8a3a' : '#4ad0ff') : '#1a2a3a'; x.fillRect(Math.round(bx + Math.sin(a2) * (br - 4)) - 2, Math.round(by - Math.cos(a2) * (br - 4)) - 2, 4, 4); }
   ptx(x, '冲', bx, by - 3, 22, lockd ? '#7a8498' : '#ffffff', { align: 'center', noStroke: 1 });
-  ptx(x, lockd ? '吃鱼回气' : '按住', bx, by + 18, 11, lockd ? '#ff8a3a' : '#8ad0ff', { align: 'center', noStroke: 1 }); x.globalAlpha = 1;
+  ptx(x, lockd ? '吃鱼补体力' : '按住', bx, by + 18, 11, lockd ? '#ff8a3a' : '#8ad0ff', { align: 'center', noStroke: 1, maxWidth: 72 }); x.globalAlpha = 1;
   if (!run.qte) UI.btn('boost', bx - br - 8, by - br - 8, (br + 8) * 2, (br + 8) * 2, () => { });
   // 摇杆
   if (IN.joy) { const j = IN.joy; x.globalAlpha = .45; for (let a = 0; a < 6.28; a += .1) { x.fillStyle = '#bfe9ff'; x.fillRect(Math.round(j.ox + Math.cos(a) * 46) - 1, Math.round(j.oy + Math.sin(a) * 46) - 1, 3, 3); } const v = IN.joyVec(); x.fillStyle = '#bfe9ff'; x.fillRect(j.ox + v.x * v.m * 40 - 12, j.oy + v.y * v.m * 40 - 12, 24, 24); x.globalAlpha = 1; }
