@@ -1115,12 +1115,12 @@ const CFG = {
   ver: 'pixel', saveKey: 'bigfish_pixel_v1', fonts: ['Kuaile'], depthScale: M2Y, W: 2800, startY: 160, bottomY: Infinity,
   SPECS, UPS, ZONES, BOSSES, SPECIES,
   spec: id => SPECS.find(s => s.id === id) || SPECS[0],
-  hunger: true, frenzy: true, invTime: 1.15, goldDiv: 60, goldRate: .025, baseSpd: 138, feverMsg: '狂食 FEVER ×2!',
+  hunger: true, frenzy: true, invTime: 1, goldDiv: 60, goldRate: .025, baseSpd: 138, feverMsg: '狂食 FEVER ×2!',
   depthOf: y => Math.max(0, y / M2Y),
   zoneOf: run => { let z = 0; ZONES.forEach((Z, i) => { if (run.depth >= Z.from) z = i; }); return z; },
-  diff: run => Math.min(4.5, .3 + run.zone * .5 + ((run.pursuit && run.pursuit.time) || 0) / 180 + ((run.pursuit && run.pursuit.residence) || 0) / 180 + run.depth / 5000),
+  diff: run => Math.min(4.8, .45 + run.zone * .52 + ((run.pursuit && run.pursuit.time) || 0) / 180 + ((run.pursuit && run.pursuit.residence) || 0) / 180 + run.depth / 5000),
   huntMul: run => .9 + CFG.diff(run) * .08,
-  hungerDrain: run => 1.3 + run.zone * .2 + run.P.L * .1 + Math.min(.65, ((run.pursuit && run.pursuit.time) || 0) / 600) + (run.tideDanger ? 2.2 : 0),
+  hungerDrain: run => 1.5 + run.zone * .22 + run.P.L * .11 + Math.min(.65, ((run.pursuit && run.pursuit.time) || 0) / 600) + (run.tideDanger ? 2.2 : 0),
   habitable: (run, x, y) => Layers.habitable(run, x, y),
   // 掠食者咬过玩家或追丢后，游到屏幕外再消失（retreat 由 updateFish 处理，屏幕外才删除）
   leaveAfterHunt(run, f) { f.retreat = true; f.retreatDir = 0; f.state = 'wander'; f.aggro = -100; f.cool = Math.max(.2, f.cool); },
@@ -1128,7 +1128,7 @@ const CFG = {
     // Relative body area: growing fish need several small prey, rather than one tiny snack.
     const area = (f.r / Math.max(1, run.P.r)) ** 2;
     const quality = how === 'perfect' ? 1.4 : how === 'qte' ? 1.2 : 1;
-    return { food: clamp(.28 * area, .018, .42) * quality, boost: clamp(.32 * area, .025, .48) * quality, heal: clamp(.12 * area, .006, .2) * quality };
+    return { food: clamp(.28 * area, .018, .42) * quality, boost: clamp(.32 * area, .025, .48) * quality, heal: clamp(.08 * area, .004, .14) * quality };
   },
   feed(run, f, how) {
     const P = run.P, meal = CFG.foodRecovery(run, f, how);
@@ -1151,7 +1151,7 @@ const CFG = {
   growMsg: L => '长大了! 体型 ' + (L + 1),
   thrashN: run => clamp(1 + Math.floor(CFG.diff(run) * 1.2), 1, 4),
   escapeN: run => clamp(3 + Math.floor(CFG.diff(run)), 3, 6),
-  density: run => 26 + Math.floor(CFG.diff(run) * 5),
+  density: run => 28 + Math.floor(CFG.diff(run) * 5),
   inWorld: (x, y, sp) => Math.abs(x) < CFG.W / 2 - 60 && y > Math.max(40, (sp.ref || sp).dy[0]) && y < Math.min(CFG.bottomY - 40, (sp.ref || sp).dy[1]),
   clampSpawn: (x, y, sp) => { const s = sp.ref || sp; return [clamp(x, -CFG.W / 2 + 70, CFG.W / 2 - 70), clamp(y, Math.max(50, s.dy[0] - 80), Math.min(CFG.bottomY - 50, s.dy[1] + 80))]; },
   bound(run, P) {
@@ -1182,13 +1182,13 @@ const CFG = {
           h.resumeLeft = null; if (!resume) h.wave++;
           Layers.spawnHunters(run, h);
         } else if (h.phase === 'hunt') {
-          h.phase = 'rest'; h.left = 7;
+          h.phase = 'rest'; h.left = 6;
           for (const f of run.fish) if (f.eventHunter && f.homeZone === run.zone) { f.retreat = true; f.aggro = -100; f.state = 'wander'; }
           run.score += 60 + run.zone * 35; run.P.boost = 1;
           say(run, '逃离追猎! 补给鱼群出现', '#7affc8', 2.4);
           const food = CFG.bossFood(run);
           Layers.supplies(run, food, 8);
-        } else { h.phase = 'calm'; h.left = Math.max(4, 11 - h.level * 1.1); }
+        } else { h.phase = 'calm'; h.left = Math.max(3.5, 9.5 - h.level * 1.1); }
       }
     }
     const pressure = Math.max(h.phase === 'hunt' ? 1 : h.phase === 'warning' ? .6 : 0, h.storm ? (h.storm.elapsed < Layers.warningTime ? .6 : 1) : 0);
@@ -1242,7 +1242,7 @@ const upCost = id => Math.round(40 * Math.pow(upLv(id) + 1, 1.55));
 // Each biome owns its hunt, score and irreversible oxygen-tide progress for this run.
 const Layers = {
   // Oxygen is a fixed per-layer countdown. Eating never extends it.
-  stay: [38, 36, 34, 32, 30, 28, 26, 24, Infinity],
+  stay: [34, 32, 30, 28, 26, 24, 22, 20, Infinity],
   warningTime: 12,
   limit(h) { return Layers.stay[h.zone]; },
   backgroundDrain: .6,
@@ -1391,7 +1391,7 @@ const Layers = {
     if (run.over || run.qte || run.boss) return h;
     h.entryGrace = Math.max(0, h.entryGrace - dt); h.time += dt; h.residence += dt;
     if (Math.abs(run.depth - h.anchorDepth) >= 90) { h.anchorDepth = run.depth; h.residence = Math.max(0, h.residence - 35); }
-    h.level = Math.min(7, 1 + Math.floor(h.time / 55) + Math.floor(h.residence / 45) + Math.floor(zone / 2));
+    h.level = Math.min(7, 1 + Math.floor(h.time / 45) + Math.floor(h.residence / 38) + Math.floor(zone / 2));
     const next = ZONES[zone + 1];
     Layers.advanceOxygen(run, oxygenDt);
     if (!h.storm && next) { const left = Layers.remaining(h); if (left <= 10 && Math.ceil(left) !== h.lastTick) { h.lastTick = Math.ceil(left); AU.sfx('tick'); } }
@@ -1399,7 +1399,7 @@ const Layers = {
     run.tideDanger = run.P.y <= Layers.oxygenFront(run);
     if (run.tideDanger && h.entryGrace <= 0) {
       run.oxygenDamageT += dt;
-      if (run.oxygenDamageT >= 2.4 && run.P.inv <= 0) { run.oxygenDamageT = 0; hurt(run, 1, 'tide'); }
+      if (run.oxygenDamageT >= 1.8 && run.P.inv <= 0) { run.oxygenDamageT = 0; hurt(run, 1, 'tide'); }
     } else run.oxygenDamageT = 0;
     Layers.clearWater(run);
     h.ecologyCd -= dt;
