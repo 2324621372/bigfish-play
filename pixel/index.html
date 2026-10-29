@@ -2511,7 +2511,11 @@ const DeepBoss = {
   parts(b, time = b.pt) {
     const family = b.def.family, pose = DeepBoss.pose(b,time), k = b.phase === 'atk' ? clamp(time/b.duration,0,1) : 0;
     const charge = b.phase === 'tele' ? clamp(time/b.duration,0,1) : b.phase === 'atk' ? 1 : 0;
-    const p = (x,y) => BOSS.local(b,x,y,pose), parts = [];
+    // A single rigid transform for all limb points; collision samples use the
+    // same geometry as drawing without repeating sin/cos for every vertex.
+    const facing = b.facing || 1, angle = (b.pitch || 0) * facing;
+    const ca = Math.cos(angle) * b.scale, sa = Math.sin(angle) * b.scale;
+    const p = (x,y) => ({ x:pose.x + ca*x*facing - sa*y, y:pose.y + sa*x*facing + ca*y }), parts = [];
     const limb = (pts,r,kind,active) => { parts.push({ points:pts.map(v=>p(v[0],v[1])), r:r*b.scale, kind, active }); };
     if (family === 'crab') {
       for (const side of [-1,1]) {
@@ -2616,9 +2620,9 @@ Object.assign(BOSS,{
   attack(run,b){ if(!b.def.family)return NativeBoss.attack(run,b);BOSS.next(b,'atk',['coil','clawsweep','barb','tailsweep'].includes(b.atk)?1.7:1.25);b.attackHit=false;AU.sfx('dash'); },
   shapes(b,time=b.pt){
     if(!b.def.family)return NativeBoss.shapes(b,time);if(b.phase!=='atk'||b.dead)return [];
-    const out=[];
-    if(b.def.family==='ray'&&b.atk==='glide'){const {pose,parts}=DeepBoss.parts(b,time),fin=parts.find(p=>p.kind==='fin'),half=dist(fin.points[1].x,fin.points[1].y,BOSS.local(b,-10,0,pose).x,BOSS.local(b,-10,0,pose).y)/b.scale;for(let x=-43;x<25;x+=4){const h=half*(x<-10?(x+45)/35:(25-x)/35);out.push({a:BOSS.local(b,x,-h,pose),b:BOSS.local(b,x,h,pose),r:2*b.scale,kind:'wing'});}}
-    for(const part of DeepBoss.parts(b,time).parts)if(part.active)for(let i=1;i<part.points.length;i++)out.push({a:part.points[i-1],b:part.points[i],r:part.radii?Math.min(part.radii[i-1],part.radii[i]):part.r,kind:part.kind});return out;
+    const out=[], {pose,parts}=DeepBoss.parts(b,time);
+    if(b.def.family==='ray'&&b.atk==='glide'){const fin=parts.find(p=>p.kind==='fin'),half=dist(fin.points[1].x,fin.points[1].y,BOSS.local(b,-10,0,pose).x,BOSS.local(b,-10,0,pose).y)/b.scale;for(let x=-43;x<25;x+=4){const h=half*(x<-10?(x+45)/35:(25-x)/35);out.push({a:BOSS.local(b,x,-h,pose),b:BOSS.local(b,x,h,pose),r:2*b.scale,kind:'wing'});}}
+    for(const part of parts)if(part.active)for(let i=1;i<part.points.length;i++)out.push({a:part.points[i-1],b:part.points[i],r:part.radii?Math.min(part.radii[i-1],part.radii[i]):part.r,kind:part.kind});return out;
   },
   atkUpd(run,b,dt){if(!b.def.family)return NativeBoss.atkUpd(run,b,dt);NativeBoss.atkUpd(run,b,dt);const pose=DeepBoss.pose(b);b.x=pose.x;b.y=pose.y;b.cx=b.x;b.cy=b.y;},
   hint(b){
@@ -3516,7 +3520,7 @@ function drawSil(g, type, L, ph) {
 // 剪影统一：同一帧所有剪影同一个颜色（按当前水深）、同一个透明度；先画到不透明缓冲，再整体半透明合成，重叠处也不会变深。
 // 剪影是渲染层的小状态：从屏幕外游进来、游出屏幕后才移除（不在画面里淡入淡出）。随机数用 Math.random，不影响游戏的种子序列。
 const SIL_ALPHA = .4;
-const Sil = { run: null, t: 0, dt: 0, layers: [[], []], cd: [0, 0], init: [true, true], buf: null, bg: null };
+const Sil = { run: null, t: 0, dt: 0, layers: [[], []], cd: [0, 0], init: [true, true], buffers: [null, null] };
 function silColor(d) {
   d = Math.max(0, d);
   const shallow = mixRGB(shade(waterCol(d), .45), [10, 30, 50], .2), deep = mixRGB(bioMix(d, 'far', 0), bioMix(d, 'rim'), .1);
@@ -3551,16 +3555,23 @@ function silhouettes(run, li, p, sizeK, target) {
   const width = Math.min(VW, Math.ceil(maxX)) - ox, height = Math.min(VH, Math.ceil(maxY)) - oy;
   if (width <= 0 || height <= 0) return;
   const ss = Math.max(1, (G.scale || 1) * (G.dpr || 1));
-  // Grow in tiles, so moving creatures do not resize the canvas every frame.
-  const bw = Math.ceil(width * ss / 128) * 128, bh = Math.ceil(height * ss / 128) * 128;
-  if (!Sil.buf || Sil.buf.width !== bw || Sil.buf.height !== bh) [Sil.buf, Sil.bg] = off(bw, bh);
-  const b = Sil.bg; b.setTransform(1, 0, 0, 1, 0, 0); b.clearRect(0, 0, bw, bh); b.setTransform(ss, 0, 0, ss, -ox * ss, -oy * ss);
+  // Each parallax layer owns its surface. Reusing one surface for different bounds
+  // alternated sizes twice per frame, allocating large GPU textures during combat.
+  // Retain capacity while creatures move; only grow in tiles, or reset on resize.
+  const view = [VW, VH, ss].join(':'), bw = Math.ceil(width * ss / 128) * 128, bh = Math.ceil(height * ss / 128) * 128;
+  let buf = Sil.buffers[li];
+  if (!buf || buf.view !== view || buf.c.width < bw || buf.c.height < bh) {
+    const sameView = buf && buf.view === view;
+    const [c, b] = off(Math.max(bw, sameView ? buf.c.width : 0), Math.max(bh, sameView ? buf.c.height : 0));
+    buf = Sil.buffers[li] = { c, b, view };
+  }
+  const b = buf.b; b.setTransform(1, 0, 0, 1, 0, 0); b.clearRect(0, 0, Math.ceil(width * ss) + 1, Math.ceil(height * ss) + 1); b.setTransform(ss, 0, 0, ss, -ox * ss, -oy * ss);
   b.globalAlpha = 1; b.fillStyle = b.strokeStyle = rgbaOf(silColor(cam.y / M2Y));
   for (const o of list) {
     const [x, y] = screen(o);
     b.save(); b.translate(x, y); if (o.type !== 'jelly') b.scale(o.dir, 1); drawSil(b, o.type, o.L * s, o.ph * (o.type === 'whale' ? .7 : 1) + o.seed); b.restore();
   }
-  g.save(); g.globalAlpha = SIL_ALPHA; g.drawImage(Sil.buf, 0, 0, width * ss, height * ss, ox, oy, width, height); g.restore();
+  g.save(); g.globalAlpha = SIL_ALPHA; g.drawImage(buf.c, 0, 0, width * ss, height * ss, ox, oy, width, height); g.restore();
 }
 
 // ==== pixel/render.js ====
@@ -3646,11 +3657,18 @@ function drawNativeBoss(run, b) {
     for (const arm of BOSS.arms(b)) {
       const pts = arm.points.map(p => ({ x: W.sx(p.x), y: W.sy(p.y) })), radii = arm.points.map(p => p.r * z);
       const P = BossArt.limb(g, pts, radii, arm.active ? '#de5464' : '#b0384e', { edge: '#3a0a1c', belly: arm.active ? '#ff9a8c' : '#e2747a', back: '#7a1a34', hi: 'rgba(255,200,190,.45)' });
+      // Batch each arm's suckers into two paths instead of one fill per disc.
+      g.fillStyle = '#ffdcc8'; g.beginPath();
       for (let i = 2; i < P.length - 1; i += 2) {
         const p = P[i], size = Math.max(1, p.r * .34), x = p.x - p.nx * p.r * .48, y = p.y - p.ny * p.r * .48;
-        g.fillStyle = '#ffdcc8'; g.beginPath(); g.ellipse(x, y, size, size * .72, Math.atan2(p.ny, p.nx), 0, Math.PI * 2); g.fill();
-        g.fillStyle = '#9b3b50'; g.beginPath(); g.arc(x, y, size * .4, 0, Math.PI * 2); g.fill();
+        g.moveTo(x + p.nx * size, y + p.ny * size); g.ellipse(x, y, size, size * .72, Math.atan2(p.ny, p.nx), 0, Math.PI * 2);
       }
+      g.fill(); g.fillStyle = '#9b3b50'; g.beginPath();
+      for (let i = 2; i < P.length - 1; i += 2) {
+        const p = P[i], size = Math.max(1, p.r * .34) * .4, x = p.x - p.nx * p.r * .48, y = p.y - p.ny * p.r * .48;
+        g.moveTo(x + size, y); g.arc(x, y, size, 0, Math.PI * 2);
+      }
+      g.fill();
       if (arm.active && b.phase === 'tele') { const tip = P[P.length - 1]; g.save(); g.globalCompositeOperation = 'lighter'; g.fillStyle = `rgba(255,140,120,${.3 + Math.sin(b.pt * 18) * .2})`; g.beginPath(); g.arc(tip.x, tip.y, tip.r * 3 + 6 * z, 0, 7); g.fill(); g.restore(); }
     }
     const e = cacheSpr('nativeKrakenMantle', () => krakenSpr(0, false));
